@@ -1,13 +1,29 @@
 -- ==========================================================
--- 🤖 IA CHAT BOT - GUI NATIVA (funciona em qualquer executor)
--- Digite uma letra no chat e a IA te responde!
+-- 🤖 IA CHAT BOT - GUI NATIVA (versão 2.0)
+-- ✅ Anti-filtro de mensagens
+-- ✅ Correção: sem botões duplicados
 -- ==========================================================
 
 local Players = game:GetService("Players")
 local TextChatService = game:GetService("TextChatService")
 local UserInputService = game:GetService("UserInputService")
+local StarterGui = game:GetService("StarterGui")
+local CoreGui = game:GetService("CoreGui")
 
 local localPlayer = Players.LocalPlayer
+
+-- ===== LIMPEZA: remove GUI antiga se existir (ANTES DE TUDO) =====
+pcall(function()
+    local old = CoreGui:FindFirstChild("IAChatBotGui")
+    if old then old:Destroy() end
+end)
+pcall(function()
+    local pg = localPlayer:FindFirstChild("PlayerGui")
+    if pg then
+        local old = pg:FindFirstChild("IAChatBotGui")
+        if old then old:Destroy() end
+    end
+end)
 
 -- ===== ESTADO =====
 local iaActive = false
@@ -17,6 +33,10 @@ local minMessageCooldown = 2.3
 local userCooldowns = {}
 local cooldownTime = 3
 local chatConnection = nil
+
+-- ===== ANTI-FILTRO =====
+local pendingMessages = {}
+local MAX_RESEND = 3
 
 -- ===== BASE DE DADOS (26 LETRAS) =====
 local iaData = {
@@ -157,7 +177,7 @@ local alphabet = {"A","B","C","D","E","F","G","H","I","J","K","L","M","N","O","P
 -- ===== NOTIFICAÇÃO =====
 local function notify(title, text, duration)
     pcall(function()
-        game:GetService("StarterGui"):SetCore("SendNotification", {
+        StarterGui:SetCore("SendNotification", {
             Title = title, Text = text, Duration = duration or 5
         })
     end)
@@ -176,11 +196,66 @@ local function Chat(msg)
     end)
 end
 
-local function SendMessage(msg)
+-- ===== ANTI-FILTRO: cria variação da mensagem =====
+local function makeVariation(text, attempt)
+    local v = text
+    if attempt == 1 then
+        v = string.gsub(v, "[%|%?%.%!%,]", "")
+        v = string.gsub(v, "  ", " ")
+    elseif attempt == 2 then
+        v = string.gsub(v, "á", "a")
+        v = string.gsub(v, "é", "e")
+        v = string.gsub(v, "í", "i")
+        v = string.gsub(v, "ó", "o")
+        v = string.gsub(v, "ú", "u")
+        v = string.gsub(v, "ã", "a")
+        v = string.gsub(v, "õ", "o")
+        v = string.gsub(v, "ç", "c")
+        v = string.gsub(v, "â", "a")
+        v = string.gsub(v, "ê", "e")
+        v = string.gsub(v, "ô", "o")
+    else
+        v = v .. " ✨"
+    end
+    return v
+end
+
+-- ===== ENVIAR MENSAGEM (com anti-filtro) =====
+local function SendMessage(msg, attempts, prepend)
+    attempts = attempts or 0
     local elapsed = tick() - timeSinceLastMessage
     if elapsed < minMessageCooldown then task.wait(minMessageCooldown - elapsed) end
+
+    local entry = {text = msg, attempts = attempts}
+    if prepend then
+        table.insert(pendingMessages, 1, entry)
+    else
+        table.insert(pendingMessages, entry)
+    end
+    while #pendingMessages > 30 do table.remove(pendingMessages, 1) end
+
     Chat(msg)
     timeSinceLastMessage = tick()
+end
+
+-- ===== DETECTAR MENSAGEM FILTRADA =====
+local function handleOwnMessage(received)
+    if #pendingMessages == 0 then return end
+    local p = pendingMessages[1]
+    local receivedClean = string.gsub(received, "#", "")
+    local originalClean = string.gsub(p.text, "#", "")
+
+    local isFiltered = string.find(received, "#") ~= nil
+        or math.abs(#receivedClean - #originalClean) > 5
+
+    table.remove(pendingMessages, 1)
+
+    if isFiltered and p.attempts < MAX_RESEND then
+        local variant = makeVariation(p.text, p.attempts + 1)
+        task.wait(2)
+        SendMessage(variant, p.attempts + 1, true)
+        print("[Anti-filtro] Reenviando mensagem filtrada (tentativa "..(p.attempts + 1)..")")
+    end
 end
 
 -- ===== UTIL =====
@@ -242,13 +317,21 @@ local function ProcessMessage(player, message)
     end
 end
 
+-- ===== LISTENER DO CHAT =====
 local function StartListening()
     if chatConnection then return end
     chatConnection = TextChatService.MessageReceived:Connect(function(textChatMessage)
-        if not iaActive then return end
         if not textChatMessage.TextSource then return end
         local player = Players:GetPlayerByUserId(textChatMessage.TextSource.UserId)
         if not player then return end
+
+        -- Se a mensagem é NOSSA, verifica se foi filtrada
+        if player == localPlayer then
+            handleOwnMessage(textChatMessage.Text)
+            return
+        end
+
+        if not iaActive then return end
         ProcessMessage(player, textChatMessage.Text)
     end)
 end
@@ -298,10 +381,10 @@ local screenGui = Instance.new("ScreenGui")
 screenGui.Name = "IAChatBotGui"
 screenGui.ResetOnSpawn = false
 screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-pcall(function() screenGui.Parent = game:GetService("CoreGui") end)
+pcall(function() screenGui.Parent = CoreGui end)
 if not screenGui.Parent then screenGui.Parent = localPlayer:WaitForChild("PlayerGui") end
 
--- ===== BOTÃO FLUTUANTE PRA ABRIR =====
+-- ===== BOTÃO FLUTUANTE =====
 local floatingBtn = Instance.new("TextButton")
 floatingBtn.Name = "FloatingButton"
 floatingBtn.Size = UDim2.new(0, 60, 0, 60)
@@ -341,7 +424,7 @@ mainStroke.Color = Color3.fromRGB(60, 130, 220)
 mainStroke.Thickness = 2
 mainStroke.Parent = mainFrame
 
--- ===== TOPO (TÍTULO) =====
+-- ===== TOPO =====
 local titleBar = Instance.new("Frame")
 titleBar.Name = "TitleBar"
 titleBar.Size = UDim2.new(1, 0, 0, 40)
@@ -554,7 +637,6 @@ tabConfig.Parent = contentFrame
 
 makeLabel(tabConfig, "⚙️ CONFIGURAÇÕES", 10, 22, Color3.fromRGB(100, 180, 255))
 
--- Cooldown input
 local cdLabel = makeLabel(tabConfig, "⏱️ Cooldown entre letras: "..cooldownTime.."s", 45, 25)
 local cdInput = Instance.new("TextBox")
 cdInput.Size = UDim2.new(1, 0, 0, 38)
@@ -621,7 +703,6 @@ tabConfigBtn.MouseButton1Click:Connect(function()
     setActiveTab(tabConfigBtn, tabConfig, {tabMainBtn, tabLettersBtn}, {tabMain, tabLetters})
 end)
 
--- Começa na aba Principal
 tabMainBtn.BackgroundColor3 = Color3.fromRGB(60, 130, 220)
 
 -- ===== ABRIR/FECHAR GUI =====
@@ -630,648 +711,8 @@ floatingBtn.MouseButton1Click:Connect(function()
     floatingBtn.Visible = not mainFrame.Visible
 end)
 
--- ===== SUPORTE MOBILE (botão flutuante já é clicável) =====
--- Toque no botão flutuante já funciona via MouseButton1Click no mobile
-
 -- ===== MENSAGEM INICIAL =====
 notify("🤖 IA Chat Bot", "Script carregado! Clique no botão 🤖 para abrir a GUI.", 6)
 
-print("[IA Chat Bot] Script carregado com sucesso!")-- ==========================================================
--- 🤖 IA CHAT BOT - GUI NATIVA (funciona em qualquer executor)
--- Digite uma letra no chat e a IA te responde!
--- ==========================================================
-
-local Players = game:GetService("Players")
-local TextChatService = game:GetService("TextChatService")
-local UserInputService = game:GetService("UserInputService")
-
-local localPlayer = Players.LocalPlayer
-
--- ===== ESTADO =====
-local iaActive = false
-local awaitingPlayers = {}
-local timeSinceLastMessage = tick()
-local minMessageCooldown = 2.3
-local userCooldowns = {}
-local cooldownTime = 3
-local chatConnection = nil
-
--- ===== BASE DE DADOS (26 LETRAS) =====
-local iaData = {
-    A = { theme = "Animais", options = {
-        { q = "Qual é o maior animal do mundo?", a = "A baleia-azul! Pode chegar a 30 metros e pesar 180 toneladas." },
-        { q = "Qual animal vive mais tempo?", a = "A tartaruga-das-galápagos pode viver mais de 150 anos!" },
-        { q = "Qual animal corre mais rápido?", a = "O guepardo, atingindo até 120 km/h em corridas curtas!" },
-    }},
-    B = { theme = "Brasil", options = {
-        { q = "Qual é a capital do Brasil?", a = "Brasília, inaugurada em 21 de abril de 1960." },
-        { q = "Quantos estados o Brasil tem?", a = "26 estados + o Distrito Federal = 27 unidades federativas." },
-        { q = "Qual é o maior rio do Brasil?", a = "O Rio Amazonas, o maior em volume de água do mundo." },
-    }},
-    C = { theme = "Ciência", options = {
-        { q = "O que é fotossíntese?", a = "Processo em que plantas produzem alimento usando luz solar, água e CO2." },
-        { q = "Quantos ossos tem o corpo humano?", a = "Um adulto tem 206 ossos. Um bebê nasce com cerca de 300!" },
-        { q = "Qual é o símbolo químico da água?", a = "H2O: 2 hidrogênios + 1 oxigênio." },
-    }},
-    D = { theme = "Descobertas", options = {
-        { q = "Quem descobriu a penicilina?", a = "Alexander Fleming, em 1928. Foi o primeiro antibiótico!" },
-        { q = "Quem inventou a lâmpada?", a = "Thomas Edison, em 1879." },
-        { q = "Quem descobriu o Brasil?", a = "Pedro Álvares Cabral, em 22 de abril de 1500." },
-    }},
-    E = { theme = "Espaço", options = {
-        { q = "Qual é o maior planeta?", a = "Júpiter! Caberiam mais de 1.300 Terras dentro dele." },
-        { q = "Quantos planetas existem?", a = "8: Mercúrio, Vênus, Terra, Marte, Júpiter, Saturno, Urano e Netuno." },
-        { q = "Qual planeta está mais perto do Sol?", a = "Mercúrio, a cerca de 58 milhões de km do Sol." },
-    }},
-    F = { theme = "Futebol", options = {
-        { q = "Quantas Copas o Brasil ganhou?", a = "5 Copas: 1958, 1962, 1970, 1994 e 2002. Maior campeão!" },
-        { q = "Quem é o Rei do Futebol?", a = "Pelé! Marcou mais de 1.000 gols e ganhou 3 Copas." },
-        { q = "Quem é o maior artilheiro da seleção?", a = "Neymar, superando Pelé em 2023." },
-    }},
-    G = { theme = "Geografia", options = {
-        { q = "Qual é o maior país do mundo?", a = "A Rússia, com cerca de 17 milhões de km²." },
-        { q = "Qual é o maior oceano?", a = "O Pacífico, cobrindo um terço da Terra." },
-        { q = "Qual é o maior deserto quente?", a = "O Saara, no norte da África, com 9 milhões de km²." },
-    }},
-    H = { theme = "História", options = {
-        { q = "Quando começou a 2ª Guerra?", a = "1º de setembro de 1939, com a invasão da Polônia." },
-        { q = "Quando caiu o Muro de Berlim?", a = "9 de novembro de 1989, marcando o fim da Guerra Fria." },
-        { q = "Quem foi Cleópatra?", a = "A última rainha do Egito Antigo, famosa por sua inteligência." },
-    }},
-    I = { theme = "Inventos", options = {
-        { q = "Quem inventou o telefone?", a = "Alexander Graham Bell, em 1876." },
-        { q = "Quem criou a internet?", a = "Tim Berners-Lee criou a World Wide Web em 1989." },
-        { q = "Quem inventou o avião?", a = "Santos Dumont voou com o 14-Bis em 1906, em Paris." },
-    }},
-    J = { theme = "Japão", options = {
-        { q = "Qual é a capital do Japão?", a = "Tóquio, com mais de 13 milhões de habitantes." },
-        { q = "Qual é a comida típica?", a = "Sushi: arroz com peixe cru ou outros ingredientes." },
-        { q = "O que era um samurai?", a = "Guerreiro japonês medieval que seguia o código Bushido." },
-    }},
-    K = { theme = "Curiosidades", options = {
-        { q = "Quanto tempo sem água?", a = "Cerca de 3 dias, variando conforme clima e saúde." },
-        { q = "Quantos corações tem um polvo?", a = "3 corações! Dois bombeiam para as brânquias, um para o corpo." },
-        { q = "Qual é o país mais populoso?", a = "A Índia, ultrapassando a China em 2023." },
-    }},
-    L = { theme = "Literatura", options = {
-        { q = "Quem escreveu Dom Casmurro?", a = "Machado de Assis, em 1899." },
-        { q = "Quem escreveu Romeu e Julieta?", a = "William Shakespeare, por volta de 1595." },
-        { q = "Quem escreveu Harry Potter?", a = "J.K. Rowling, com o primeiro livro em 1997." },
-    }},
-    M = { theme = "Matemática", options = {
-        { q = "Quanto vale o PI?", a = "Aproximadamente 3,14159... Constante infinita usada em círculos." },
-        { q = "Quantos lados tem um hexágono?", a = "6 lados. Como nas colmeias das abelhas!" },
-        { q = "Quanto é 7 x 8?", a = "56!" },
-    }},
-    N = { theme = "Natureza", options = {
-        { q = "Qual é a maior floresta?", a = "A Amazônica, com cerca de 5,5 milhões de km²." },
-        { q = "Qual é a montanha mais alta?", a = "O Everest, com 8.848 metros." },
-        { q = "Qual é o maior rio do mundo?", a = "O Amazonas em volume. O Nilo é o mais longo." },
-    }},
-    O = { theme = "Ocorrências", options = {
-        { q = "Quando foi a Revolução Francesa?", a = "1789, com a queda da Bastilha em 14 de julho." },
-        { q = "Quando o homem pisou na Lua?", a = "20 de julho de 1969, Apollo 11, Neil Armstrong." },
-        { q = "Quando foi o 11 de setembro?", a = "2001, nos Estados Unidos." },
-    }},
-    P = { theme = "Países", options = {
-        { q = "Qual é o país mais populoso?", a = "A Índia, com mais de 1,4 bilhão de habitantes." },
-        { q = "Qual é o país mais rico?", a = "Os EUA têm a maior economia, seguidos pela China." },
-        { q = "Qual é o menor país?", a = "O Vaticano, com apenas 0,44 km²!" },
-    }},
-    Q = { theme = "Química", options = {
-        { q = "Qual o símbolo químico do ouro?", a = "Au, do latim 'aurum'." },
-        { q = "Qual o elemento mais abundante?", a = "O hidrogênio, presente nas estrelas." },
-        { q = "O que é H2O?", a = "A fórmula da água: 2 hidrogênios + 1 oxigênio." },
-    }},
-    R = { theme = "Recordes", options = {
-        { q = "Quem é o homem mais rápido?", a = "Usain Bolt, 100m em 9,58 segundos." },
-        { q = "Qual é o prédio mais alto?", a = "O Burj Khalifa, em Dubai, com 828 metros." },
-        { q = "Qual é o animal mais pesado?", a = "A baleia-azul, podendo pesar 180 toneladas." },
-    }},
-    S = { theme = "Saúde", options = {
-        { q = "Quantas horas devemos dormir?", a = "Entre 7 e 9 horas por noite." },
-        { q = "Por que a água é importante?", a = "Hidrata, regula temperatura e ajuda os órgãos." },
-        { q = "Quantos litros de sangue temos?", a = "Cerca de 5 a 6 litros num adulto." },
-    }},
-    T = { theme = "Tecnologia", options = {
-        { q = "O que é IA?", a = "Inteligência Artificial: máquinas simulando inteligência humana." },
-        { q = "Quem criou o Windows?", a = "Bill Gates fundou a Microsoft em 1975." },
-        { q = "Quem criou a Apple?", a = "Steve Jobs, Steve Wozniak e Ronald Wayne, em 1976." },
-    }},
-    U = { theme = "Universo", options = {
-        { q = "Quantos anos tem o universo?", a = "Cerca de 13,8 bilhões de anos (Big Bang)." },
-        { q = "O que é um buraco negro?", a = "Região com gravidade tão forte que nem a luz escapa." },
-        { q = "Quantas galáxias existem?", a = "Estima-se mais de 2 trilhões no universo observável." },
-    }},
-    V = { theme = "Viagens", options = {
-        { q = "Qual é o país mais visitado?", a = "A França, com mais de 90 milhões de turistas/ano." },
-        { q = "Qual é o lugar mais frio?", a = "A Antártida, com temperaturas de até -89°C!" },
-        { q = "Qual é a cidade mais populosa?", a = "Tóquio, com mais de 37 milhões de pessoas." },
-    }},
-    W = { theme = "Web/Internet", options = {
-        { q = "O que significa WWW?", a = "World Wide Web, criada por Tim Berners-Lee." },
-        { q = "Quem fundou o Google?", a = "Larry Page e Sergey Brin, em 1998." },
-        { q = "Quem fundou o Facebook?", a = "Mark Zuckerberg, em 2004, em Harvard." },
-    }},
-    X = { theme = "Xadrez", options = {
-        { q = "Quantas peças tem o xadrez?", a = "32 peças: 16 para cada jogador, em 64 casas." },
-        { q = "Qual é a peça mais poderosa?", a = "A Rainha (Dama), que se move em qualquer direção." },
-        { q = "O que é xeque-mate?", a = "Quando o rei está sob ataque sem escapatória. Fim de jogo!" },
-    }},
-    Y = { theme = "YouTube", options = {
-        { q = "Quando foi criado o YouTube?", a = "2005, por Chad Hurley, Steve Chen e Jawed Karim." },
-        { q = "Quem comprou o YouTube?", a = "O Google, em 2006, por 1,65 bilhão de dólares." },
-        { q = "Qual é o vídeo mais visto?", a = "'Baby Shark Dance', com mais de 14 bilhões de views!" },
-    }},
-    Z = { theme = "Zoologia", options = {
-        { q = "Quantas espécies existem?", a = "Entre 8 e 10 milhões, muitas ainda não descobertas." },
-        { q = "Qual é o animal mais venenoso?", a = "A vespa-do-mar (box jellyfish)." },
-        { q = "Qual é o animal mais forte?", a = "O besouro-rinoceronte, carrega 850x seu peso!" },
-    }},
-}
-
-local alphabet = {"A","B","C","D","E","F","G","H","I","J","K","L","M","N","O","P","Q","R","S","T","U","V","W","X","Y","Z"}
-
--- ===== NOTIFICAÇÃO =====
-local function notify(title, text, duration)
-    pcall(function()
-        game:GetService("StarterGui"):SetCore("SendNotification", {
-            Title = title, Text = text, Duration = duration or 5
-        })
-    end)
-end
-
--- ===== CHAT =====
-local function Chat(msg)
-    pcall(function()
-        local channel = TextChatService.TextChannels.RBXGeneral
-        if not channel then
-            for _, ch in pairs(TextChatService.TextChannels:GetChildren()) do
-                if ch:IsA("TextChannel") then channel = ch break end
-            end
-        end
-        if channel then channel:SendAsync(msg) end
-    end)
-end
-
-local function SendMessage(msg)
-    local elapsed = tick() - timeSinceLastMessage
-    if elapsed < minMessageCooldown then task.wait(minMessageCooldown - elapsed) end
-    Chat(msg)
-    timeSinceLastMessage = tick()
-end
-
--- ===== UTIL =====
-local function IsOnCooldown(player)
-    return table.find(userCooldowns, player.Name) ~= nil
-end
-
-local function AddCooldown(player)
-    table.insert(userCooldowns, player.Name)
-    task.delay(cooldownTime, function()
-        local i = table.find(userCooldowns, player.Name)
-        if i then table.remove(userCooldowns, i) end
-    end)
-end
-
--- ===== LÓGICA PRINCIPAL =====
-local function ProcessMessage(player, message)
-    if not iaActive then return end
-    if player == localPlayer then return end
-    local msg = string.upper(string.gsub(message, "%s", ""))
-    if #msg == 0 or #msg > 2 then return end
-    local firstChar = string.sub(msg, 1, 1)
-
-    local awaiting = awaitingPlayers[player.Name]
-    if awaiting then
-        if firstChar == "A" or firstChar == "B" or firstChar == "C" then
-            local optionIndex = (firstChar == "A") and 1 or (firstChar == "B") and 2 or 3
-            local themeData = iaData[awaiting]
-            if not themeData then awaitingPlayers[player.Name] = nil return end
-            local opt = themeData.options[optionIndex]
-            if not opt then return end
-            awaitingPlayers[player.Name] = nil
-            SendMessage("🤖 | "..player.DisplayName..", aqui está a resposta:")
-            task.wait(1)
-            SendMessage("💡 | "..opt.a)
-            task.wait(1)
-            SendMessage("📚 | Quer saber mais? Digite outra letra (A-Z).")
-        else
-            SendMessage("🤖 | "..player.DisplayName..", escolha A, B ou C para continuar.")
-        end
-        return
-    end
-
-    if table.find(alphabet, firstChar) then
-        if IsOnCooldown(player) then return end
-        AddCooldown(player)
-        local themeData = iaData[firstChar]
-        if not themeData then return end
-        awaitingPlayers[player.Name] = firstChar
-        SendMessage("🤖 | Olá, "..player.DisplayName.."! Letra "..firstChar..": "..themeData.theme)
-        task.wait(1)
-        SendMessage("❓ | O que você quer saber?")
-        task.wait(1)
-        for i = 1, 3 do
-            SendMessage(alphabet[i]..") "..themeData.options[i].q)
-            task.wait(1)
-        end
-        SendMessage("👉 | Digite A, B ou C para escolher.")
-    end
-end
-
-local function StartListening()
-    if chatConnection then return end
-    chatConnection = TextChatService.MessageReceived:Connect(function(textChatMessage)
-        if not iaActive then return end
-        if not textChatMessage.TextSource then return end
-        local player = Players:GetPlayerByUserId(textChatMessage.TextSource.UserId)
-        if not player then return end
-        ProcessMessage(player, textChatMessage.Text)
-    end)
-end
-StartListening()
-
--- ===== MENSAGENS DE AJUDA =====
-local instructionMessages = {
-    "📖 | COMO USAR A IA:",
-    "1️⃣ | Digite uma letra de A a Z no chat.",
-    "2️⃣ | A IA diz o tema e mostra 3 opções: A) B) C).",
-    "3️⃣ | Digite A, B ou C para escolher.",
-    "4️⃣ | A IA responde! Depois é só digitar outra letra.",
-    "💡 | Dica: clique em 'Mostrar letras' na GUI pra ver todos os temas.",
-}
-
-local function SendInstructions()
-    if not iaActive then notify("IA desativada", "Ative a IA primeiro") return end
-    for _, msg in ipairs(instructionMessages) do
-        SendMessage(msg)
-        task.wait(1.2)
-    end
-end
-
-local function SendThemeList()
-    if not iaActive then notify("IA desativada", "Ative a IA primeiro") return end
-    SendMessage("📚 | Temas disponíveis (digite a letra no chat):")
-    task.wait(1)
-    local chunk, chunkSize = {}, 0
-    for _, letter in ipairs(alphabet) do
-        local line = letter..") "..iaData[letter].theme
-        if chunkSize + #line + 3 > 180 then
-            SendMessage("📚 | "..table.concat(chunk, " | "))
-            task.wait(1.5)
-            chunk, chunkSize = {}, 0
-        end
-        table.insert(chunk, line)
-        chunkSize = chunkSize + #line + 3
-    end
-    if #chunk > 0 then SendMessage("📚 | "..table.concat(chunk, " | ")) end
-end
-
--- ==========================================================
--- ==================== INTERFACE GRÁFICA ===================
--- ==========================================================
-
-local screenGui = Instance.new("ScreenGui")
-screenGui.Name = "IAChatBotGui"
-screenGui.ResetOnSpawn = false
-screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-pcall(function() screenGui.Parent = game:GetService("CoreGui") end)
-if not screenGui.Parent then screenGui.Parent = localPlayer:WaitForChild("PlayerGui") end
-
--- ===== BOTÃO FLUTUANTE PRA ABRIR =====
-local floatingBtn = Instance.new("TextButton")
-floatingBtn.Name = "FloatingButton"
-floatingBtn.Size = UDim2.new(0, 60, 0, 60)
-floatingBtn.Position = UDim2.new(0, 20, 0.5, -30)
-floatingBtn.BackgroundColor3 = Color3.fromRGB(50, 120, 200)
-floatingBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-floatingBtn.Text = "🤖"
-floatingBtn.TextSize = 28
-floatingBtn.Font = Enum.Font.GothamBold
-floatingBtn.BorderSizePixel = 0
-floatingBtn.Active = true
-floatingBtn.Draggable = true
-floatingBtn.Parent = screenGui
-
-local flCorner = Instance.new("UICorner")
-flCorner.CornerRadius = UDim.new(1, 0)
-flCorner.Parent = floatingBtn
-
--- ===== JANELA PRINCIPAL =====
-local mainFrame = Instance.new("Frame")
-mainFrame.Name = "MainFrame"
-mainFrame.Size = UDim2.new(0, 420, 0, 480)
-mainFrame.Position = UDim2.new(0.5, -210, 0.5, -240)
-mainFrame.BackgroundColor3 = Color3.fromRGB(28, 28, 32)
-mainFrame.BorderSizePixel = 0
-mainFrame.Active = true
-mainFrame.Draggable = true
-mainFrame.Visible = false
-mainFrame.Parent = screenGui
-
-local mainCorner = Instance.new("UICorner")
-mainCorner.CornerRadius = UDim.new(0, 10)
-mainCorner.Parent = mainFrame
-
-local mainStroke = Instance.new("UIStroke")
-mainStroke.Color = Color3.fromRGB(60, 130, 220)
-mainStroke.Thickness = 2
-mainStroke.Parent = mainFrame
-
--- ===== TOPO (TÍTULO) =====
-local titleBar = Instance.new("Frame")
-titleBar.Name = "TitleBar"
-titleBar.Size = UDim2.new(1, 0, 0, 40)
-titleBar.BackgroundColor3 = Color3.fromRGB(40, 90, 160)
-titleBar.BorderSizePixel = 0
-titleBar.Parent = mainFrame
-
-local titleCorner = Instance.new("UICorner")
-titleCorner.CornerRadius = UDim.new(0, 10)
-titleCorner.Parent = titleBar
-
-local titleFix = Instance.new("Frame")
-titleFix.Size = UDim2.new(1, 0, 0, 10)
-titleFix.Position = UDim2.new(0, 0, 1, -10)
-titleFix.BackgroundColor3 = Color3.fromRGB(40, 90, 160)
-titleFix.BorderSizePixel = 0
-titleFix.Parent = titleBar
-
-local titleLabel = Instance.new("TextLabel")
-titleLabel.Size = UDim2.new(1, -50, 1, 0)
-titleLabel.Position = UDim2.new(0, 15, 0, 0)
-titleLabel.BackgroundTransparency = 1
-titleLabel.Text = "🤖 IA Chat Bot"
-titleLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
-titleLabel.TextSize = 18
-titleLabel.Font = Enum.Font.GothamBold
-titleLabel.TextXAlignment = Enum.TextXAlignment.Left
-titleLabel.Parent = titleBar
-
-local closeBtn = Instance.new("TextButton")
-closeBtn.Size = UDim2.new(0, 30, 0, 30)
-closeBtn.Position = UDim2.new(1, -38, 0, 5)
-closeBtn.BackgroundColor3 = Color3.fromRGB(200, 60, 60)
-closeBtn.Text = "X"
-closeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-closeBtn.TextSize = 14
-closeBtn.Font = Enum.Font.GothamBold
-closeBtn.BorderSizePixel = 0
-closeBtn.Parent = titleBar
-
-local closeCorner = Instance.new("UICorner")
-closeCorner.CornerRadius = UDim.new(0, 6)
-closeCorner.Parent = closeBtn
-
-closeBtn.MouseButton1Click:Connect(function()
-    mainFrame.Visible = false
-    floatingBtn.Visible = true
-end)
-
--- ===== ABAS =====
-local tabsFrame = Instance.new("Frame")
-tabsFrame.Size = UDim2.new(1, -20, 0, 34)
-tabsFrame.Position = UDim2.new(0, 10, 0, 48)
-tabsFrame.BackgroundTransparency = 1
-tabsFrame.Parent = mainFrame
-
-local function createTabButton(name, xOffset, width)
-    local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(0, width, 1, 0)
-    btn.Position = UDim2.new(0, xOffset, 0, 0)
-    btn.BackgroundColor3 = Color3.fromRGB(50, 50, 60)
-    btn.Text = name
-    btn.TextColor3 = Color3.fromRGB(220, 220, 220)
-    btn.TextSize = 13
-    btn.Font = Enum.Font.GothamBold
-    btn.BorderSizePixel = 0
-    btn.Parent = tabsFrame
-    local c = Instance.new("UICorner")
-    c.CornerRadius = UDim.new(0, 6)
-    c.Parent = btn
-    return btn
-end
-
-local tabMainBtn = createTabButton("Principal", 0, 130)
-local tabLettersBtn = createTabButton("Letras", 136, 130)
-local tabConfigBtn = createTabButton("Config", 272, 130)
-
--- ===== ÁREA DE CONTEÚDO =====
-local contentFrame = Instance.new("Frame")
-contentFrame.Size = UDim2.new(1, -20, 1, -100)
-contentFrame.Position = UDim2.new(0, 10, 0, 90)
-contentFrame.BackgroundTransparency = 1
-contentFrame.Parent = mainFrame
-
--- ===== ABA PRINCIPAL =====
-local tabMain = Instance.new("ScrollingFrame")
-tabMain.Size = UDim2.new(1, 0, 1, 0)
-tabMain.BackgroundTransparency = 1
-tabMain.BorderSizePixel = 0
-tabMain.CanvasSize = UDim2.new(0, 0, 0, 400)
-tabMain.ScrollBarThickness = 4
-tabMain.ScrollBarImageColor3 = Color3.fromRGB(60, 130, 220)
-tabMain.Parent = contentFrame
-
-local function makeLabel(parent, text, yPos, size, color)
-    local lbl = Instance.new("TextLabel")
-    lbl.Size = UDim2.new(1, 0, 0, size or 30)
-    lbl.Position = UDim2.new(0, 0, 0, yPos)
-    lbl.BackgroundTransparency = 1
-    lbl.Text = text
-    lbl.TextColor3 = color or Color3.fromRGB(230, 230, 230)
-    lbl.TextSize = 15
-    lbl.Font = Enum.Font.Gotham
-    lbl.TextWrapped = true
-    lbl.TextXAlignment = Enum.TextXAlignment.Left
-    lbl.Parent = parent
-    return lbl
-end
-
-local function makeButton(parent, text, yPos, color, callback)
-    local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(1, 0, 0, 42)
-    btn.Position = UDim2.new(0, 0, 0, yPos)
-    btn.BackgroundColor3 = color or Color3.fromRGB(50, 120, 200)
-    btn.Text = text
-    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
-    btn.TextSize = 15
-    btn.Font = Enum.Font.GothamBold
-    btn.BorderSizePixel = 0
-    btn.AutoButtonColor = true
-    btn.Parent = parent
-    local c = Instance.new("UICorner")
-    c.CornerRadius = UDim.new(0, 8)
-    c.Parent = btn
-    btn.MouseButton1Click:Connect(callback)
-    return btn
-end
-
--- Botão toggle (Ativar IA)
-local toggleBtn = Instance.new("TextButton")
-toggleBtn.Size = UDim2.new(1, 0, 0, 50)
-toggleBtn.Position = UDim2.new(0, 0, 0, 40)
-toggleBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 70)
-toggleBtn.Text = "🤖 Ativar IA"
-toggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-toggleBtn.TextSize = 17
-toggleBtn.Font = Enum.Font.GothamBold
-toggleBtn.BorderSizePixel = 0
-toggleBtn.Parent = tabMain
-local tc = Instance.new("UICorner")
-tc.CornerRadius = UDim.new(0, 8)
-tc.Parent = toggleBtn
-
-makeLabel(tabMain, "🤖 CONTROLE DA IA", 10, 22, Color3.fromRGB(100, 180, 255))
-
-toggleBtn.MouseButton1Click:Connect(function()
-    iaActive = not iaActive
-    if iaActive then
-        toggleBtn.Text = "✅ IA ATIVADA"
-        toggleBtn.BackgroundColor3 = Color3.fromRGB(50, 160, 80)
-        notify("IA ativada ✅", "Digite uma letra (A-Z) no chat para começar!")
-        SendMessage("🤖 | IA ativada! Digite uma letra (A-Z) no chat.")
-    else
-        toggleBtn.Text = "🤖 Ativar IA"
-        toggleBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 70)
-        awaitingPlayers = {}
-        notify("IA desativada ❌", "A IA foi desligada.")
-        pcall(function() SendMessage("🤖 | IA desativada.") end)
-    end
-end)
-
-makeLabel(tabMain, "📖 AJUDA", 105, 22, Color3.fromRGB(100, 180, 255))
-
-makeButton(tabMain, "📖 Mostrar instruções no chat", 135, Color3.fromRGB(70, 130, 90), SendInstructions)
-makeButton(tabMain, "📚 Mostrar o que cada letra diz", 185, Color3.fromRGB(120, 90, 180), SendThemeList)
-
-makeLabel(tabMain, "ℹ️ SOBRE", 245, 22, Color3.fromRGB(100, 180, 255))
-makeLabel(tabMain, "Digite uma letra (A-Z) no chat. A IA mostra 3 opções (A/B/C). Escolha uma e receba a resposta! Funciona para todos os jogadores do servidor enquanto a IA estiver ativada.", 275, 80, Color3.fromRGB(180, 180, 180))
-
--- ===== ABA LETRAS =====
-local tabLetters = Instance.new("ScrollingFrame")
-tabLetters.Size = UDim2.new(1, 0, 1, 0)
-tabLetters.BackgroundTransparency = 1
-tabLetters.BorderSizePixel = 0
-tabLetters.CanvasSize = UDim2.new(0, 0, 0, 26 * 32 + 20)
-tabLetters.ScrollBarThickness = 4
-tabLetters.ScrollBarImageColor3 = Color3.fromRGB(60, 130, 220)
-tabLetters.Visible = false
-tabLetters.Parent = contentFrame
-
-makeLabel(tabLetters, "📚 TODOS OS TEMAS (A-Z)", 5, 22, Color3.fromRGB(100, 180, 255))
-
-for i, letter in ipairs(alphabet) do
-    local lbl = Instance.new("TextLabel")
-    lbl.Size = UDim2.new(1, 0, 0, 30)
-    lbl.Position = UDim2.new(0, 0, 0, 30 + (i - 1) * 32)
-    lbl.BackgroundColor3 = Color3.fromRGB(40, 40, 48)
-    lbl.Text = "  "..letter..") "..iaData[letter].theme
-    lbl.TextColor3 = Color3.fromRGB(220, 220, 220)
-    lbl.TextSize = 14
-    lbl.Font = Enum.Font.Gotham
-    lbl.TextXAlignment = Enum.TextXAlignment.Left
-    lbl.BorderSizePixel = 0
-    lbl.Parent = tabLetters
-    local c = Instance.new("UICorner")
-    c.CornerRadius = UDim.new(0, 5)
-    c.Parent = lbl
-end
-
--- ===== ABA CONFIG =====
-local tabConfig = Instance.new("ScrollingFrame")
-tabConfig.Size = UDim2.new(1, 0, 1, 0)
-tabConfig.BackgroundTransparency = 1
-tabConfig.BorderSizePixel = 0
-tabConfig.CanvasSize = UDim2.new(0, 0, 0, 500)
-tabConfig.ScrollBarThickness = 4
-tabConfig.ScrollBarImageColor3 = Color3.fromRGB(60, 130, 220)
-tabConfig.Visible = false
-tabConfig.Parent = contentFrame
-
-makeLabel(tabConfig, "⚙️ CONFIGURAÇÕES", 10, 22, Color3.fromRGB(100, 180, 255))
-
--- Cooldown input
-local cdLabel = makeLabel(tabConfig, "⏱️ Cooldown entre letras: "..cooldownTime.."s", 45, 25)
-local cdInput = Instance.new("TextBox")
-cdInput.Size = UDim2.new(1, 0, 0, 38)
-cdInput.Position = UDim2.new(0, 0, 0, 75)
-cdInput.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
-cdInput.Text = tostring(cooldownTime)
-cdInput.PlaceholderText = "Digite o cooldown em segundos"
-cdInput.TextColor3 = Color3.fromRGB(230, 230, 230)
-cdInput.PlaceholderColor3 = Color3.fromRGB(140, 140, 140)
-cdInput.TextSize = 14
-cdInput.Font = Enum.Font.Gotham
-cdInput.BorderSizePixel = 0
-cdInput.ClearTextOnFocus = false
-cdInput.Parent = tabConfig
-local cc = Instance.new("UICorner")
-cc.CornerRadius = UDim.new(0, 8)
-cc.Parent = cdInput
-
-cdInput.FocusLost:Connect(function()
-    local num = tonumber(cdInput.Text)
-    if num and num >= 0 then
-        cooldownTime = num
-        cdLabel.Text = "⏱️ Cooldown entre letras: "..cooldownTime.."s"
-        notify("Cooldown atualizado", "Novo: "..cooldownTime.."s")
-    else
-        cdInput.Text = tostring(cooldownTime)
-    end
-end)
-
-makeButton(tabConfig, "🔄 Resetar cooldowns", 130, Color3.fromRGB(180, 120, 60), function()
-    userCooldowns = {}
-    notify("Cooldowns resetados ✅", "Todos podem usar a IA novamente")
-end)
-
-makeButton(tabConfig, "🧹 Limpar fila de espera", 180, Color3.fromRGB(180, 120, 60), function()
-    awaitingPlayers = {}
-    notify("Fila limpa ✅", "Todos podem recomeçar")
-end)
-
-makeLabel(tabConfig, "⚠️ ZONA DE PERIGO", 250, 22, Color3.fromRGB(255, 100, 100))
-
-makeButton(tabConfig, "❌ Destruir GUI e desativar", 280, Color3.fromRGB(200, 60, 60), function()
-    iaActive = false
-    awaitingPlayers = {}
-    if chatConnection then chatConnection:Disconnect() end
-    screenGui:Destroy()
-end)
-
--- ===== TROCA DE ABAS =====
-local function setActiveTab(activeBtn, activeFrame, inactiveBtns, inactiveFrames)
-    activeBtn.BackgroundColor3 = Color3.fromRGB(60, 130, 220)
-    for _, b in ipairs(inactiveBtns) do b.BackgroundColor3 = Color3.fromRGB(50, 50, 60) end
-    activeFrame.Visible = true
-    for _, f in ipairs(inactiveFrames) do f.Visible = false end
-end
-
-tabMainBtn.MouseButton1Click:Connect(function()
-    setActiveTab(tabMainBtn, tabMain, {tabLettersBtn, tabConfigBtn}, {tabLetters, tabConfig})
-end)
-tabLettersBtn.MouseButton1Click:Connect(function()
-    setActiveTab(tabLettersBtn, tabLetters, {tabMainBtn, tabConfigBtn}, {tabMain, tabConfig})
-end)
-tabConfigBtn.MouseButton1Click:Connect(function()
-    setActiveTab(tabConfigBtn, tabConfig, {tabMainBtn, tabLettersBtn}, {tabMain, tabLetters})
-end)
-
--- Começa na aba Principal
-tabMainBtn.BackgroundColor3 = Color3.fromRGB(60, 130, 220)
-
--- ===== ABRIR/FECHAR GUI =====
-floatingBtn.MouseButton1Click:Connect(function()
-    mainFrame.Visible = not mainFrame.Visible
-    floatingBtn.Visible = not mainFrame.Visible
-end)
-
--- ===== SUPORTE MOBILE (botão flutuante já é clicável) =====
--- Toque no botão flutuante já funciona via MouseButton1Click no mobile
-
--- ===== MENSAGEM INICIAL =====
-notify("🤖 IA Chat Bot", "Script carregado! Clique no botão 🤖 para abrir a GUI.", 6)
-
-print("[IA Chat Bot] Script carregado com sucesso!")
+print("[IA Chat Bot] Script carregado com sucesso! v2.0")
+print("[IA Chat Bot] Anti-filtro ativo | Botão duplicado corrigido")
