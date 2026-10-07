@@ -1,7 +1,9 @@
 -- ==========================================================
--- 🤖 IA CHAT BOT - GUI NATIVA (versão 2.0)
+-- 🤖 IA CHAT BOT - GUI NATIVA (versão 4.0)
 -- ✅ Anti-filtro de mensagens
--- ✅ Correção: sem botões duplicados
+-- ✅ Sem botões duplicados
+-- ✅ 6 opções (A até F)
+-- ✅ Sistema de vez única: 1 pergunta por vez (timeout 10s)
 -- ==========================================================
 
 local Players = game:GetService("Players")
@@ -12,7 +14,7 @@ local CoreGui = game:GetService("CoreGui")
 
 local localPlayer = Players.LocalPlayer
 
--- ===== LIMPEZA: remove GUI antiga se existir (ANTES DE TUDO) =====
+-- ===== LIMPEZA =====
 pcall(function()
     local old = CoreGui:FindFirstChild("IAChatBotGui")
     if old then old:Destroy() end
@@ -34,145 +36,228 @@ local userCooldowns = {}
 local cooldownTime = 3
 local chatConnection = nil
 
--- ===== ANTI-FILTRO =====
+-- ===== SISTEMA DE VEZ ÚNICA =====
+local currentAsker = nil       -- { name = "Fulano", display = "Fulano123" }
+local currentAskerToken = 0    -- evita race conditions
+local askTimeout = 10          -- segundos para escolher
+
 local pendingMessages = {}
 local MAX_RESEND = 3
 
--- ===== BASE DE DADOS (26 LETRAS) =====
+-- ===== BASE DE DADOS (26 LETRAS x 6 OPÇÕES) =====
 local iaData = {
     A = { theme = "Animais", options = {
         { q = "Qual é o maior animal do mundo?", a = "A baleia-azul! Pode chegar a 30 metros e pesar 180 toneladas." },
         { q = "Qual animal vive mais tempo?", a = "A tartaruga-das-galápagos pode viver mais de 150 anos!" },
         { q = "Qual animal corre mais rápido?", a = "O guepardo, atingindo até 120 km/h em corridas curtas!" },
+        { q = "Qual é o animal mais forte?", a = "O besouro-rinoceronte, que carrega até 850 vezes seu próprio peso!" },
+        { q = "Qual animal dorme mais tempo por dia?", a = "O coala, que dorme entre 18 e 22 horas por dia!" },
+        { q = "Qual é a única ave que pode voar para trás?", a = "O beija-flor! Ele é a única ave capaz de voar em todas as direções." },
     }},
     B = { theme = "Brasil", options = {
         { q = "Qual é a capital do Brasil?", a = "Brasília, inaugurada em 21 de abril de 1960." },
         { q = "Quantos estados o Brasil tem?", a = "26 estados + o Distrito Federal = 27 unidades federativas." },
         { q = "Qual é o maior rio do Brasil?", a = "O Rio Amazonas, o maior em volume de água do mundo." },
+        { q = "Qual é a moeda do Brasil?", a = "O Real, adotado em 1994 com o Plano Real." },
+        { q = "Qual é o maior estado brasileiro?", a = "O Amazonas, com mais de 1,5 milhão de km²." },
+        { q = "Quantas vezes o Brasil ganhou a Copa?", a = "5 vezes: 1958, 1962, 1970, 1994 e 2002." },
     }},
     C = { theme = "Ciência", options = {
         { q = "O que é fotossíntese?", a = "Processo em que plantas produzem alimento usando luz solar, água e CO2." },
         { q = "Quantos ossos tem o corpo humano?", a = "Um adulto tem 206 ossos. Um bebê nasce com cerca de 300!" },
         { q = "Qual é o símbolo químico da água?", a = "H2O: 2 hidrogênios + 1 oxigênio." },
+        { q = "Qual é o planeta mais quente?", a = "Vênus, com temperaturas em torno de 465°C!" },
+        { q = "Quantos dentes tem um adulto?", a = "32 dentes, incluindo os 4 do siso." },
+        { q = "Qual é o maior órgão do corpo humano?", a = "A pele! Pode medir cerca de 2 metros quadrados num adulto." },
     }},
     D = { theme = "Descobertas", options = {
         { q = "Quem descobriu a penicilina?", a = "Alexander Fleming, em 1928. Foi o primeiro antibiótico!" },
         { q = "Quem inventou a lâmpada?", a = "Thomas Edison, em 1879." },
         { q = "Quem descobriu o Brasil?", a = "Pedro Álvares Cabral, em 22 de abril de 1500." },
+        { q = "Quem descobriu a gravidade?", a = "Isaac Newton, observando a queda de uma maçã, em 1666." },
+        { q = "Quem foi o primeiro a pisar na Lua?", a = "Neil Armstrong, em 20 de julho de 1969." },
+        { q = "Quem descobriu a América?", a = "Cristóvão Colombo, em 1492 (chegou às Bahamas)." },
     }},
     E = { theme = "Espaço", options = {
         { q = "Qual é o maior planeta?", a = "Júpiter! Caberiam mais de 1.300 Terras dentro dele." },
         { q = "Quantos planetas existem?", a = "8: Mercúrio, Vênus, Terra, Marte, Júpiter, Saturno, Urano e Netuno." },
         { q = "Qual planeta está mais perto do Sol?", a = "Mercúrio, a cerca de 58 milhões de km do Sol." },
+        { q = "Qual é a maior estrela conhecida?", a = "UY Scuti, com um raio 1.700 vezes maior que o Sol!" },
+        { q = "Quanto tempo a luz do Sol demora pra chegar na Terra?", a = "Cerca de 8 minutos e 20 segundos." },
+        { q = "Qual é o planeta conhecido como 'Planeta Vermelho'?", a = "Marte, por causa do óxido de ferro em sua superfície." },
     }},
     F = { theme = "Futebol", options = {
         { q = "Quantas Copas o Brasil ganhou?", a = "5 Copas: 1958, 1962, 1970, 1994 e 2002. Maior campeão!" },
         { q = "Quem é o Rei do Futebol?", a = "Pelé! Marcou mais de 1.000 gols e ganhou 3 Copas." },
         { q = "Quem é o maior artilheiro da seleção?", a = "Neymar, superando Pelé em 2023." },
+        { q = "Quantos jogadores tem um time de futebol em campo?", a = "11 jogadores (incluindo o goleiro)." },
+        { q = "Qual país sediou a Copa de 2014?", a = "O Brasil! A Alemanha venceu, batendo a Argentina por 1x0." },
+        { q = "Qual é o maior estádio do Brasil?", a = "O Maracanã, no Rio de Janeiro, com capacidade para cerca de 78 mil pessoas." },
     }},
     G = { theme = "Geografia", options = {
         { q = "Qual é o maior país do mundo?", a = "A Rússia, com cerca de 17 milhões de km²." },
         { q = "Qual é o maior oceano?", a = "O Pacífico, cobrindo um terço da Terra." },
         { q = "Qual é o maior deserto quente?", a = "O Saara, no norte da África, com 9 milhões de km²." },
+        { q = "Qual é a montanha mais alta do mundo?", a = "O Monte Everest, com 8.848 metros." },
+        { q = "Qual é a maior floresta tropical?", a = "A Floresta Amazônica, com cerca de 5,5 milhões de km²." },
+        { q = "Qual continente tem mais países?", a = "A África, com 54 países reconhecidos." },
     }},
     H = { theme = "História", options = {
         { q = "Quando começou a 2ª Guerra?", a = "1º de setembro de 1939, com a invasão da Polônia." },
         { q = "Quando caiu o Muro de Berlim?", a = "9 de novembro de 1989, marcando o fim da Guerra Fria." },
         { q = "Quem foi Cleópatra?", a = "A última rainha do Egito Antigo, famosa por sua inteligência." },
+        { q = "Quando terminou a 2ª Guerra?", a = "Em 1945, com a rendição do Japão em 2 de setembro." },
+        { q = "Quem foi o primeiro presidente do Brasil?", a = "Deodoro da Fonseca, que proclamou a República em 1889." },
+        { q = "Em que ano o homem pisou na Lua?", a = "1969, na missão Apollo 11 dos EUA." },
     }},
     I = { theme = "Inventos", options = {
         { q = "Quem inventou o telefone?", a = "Alexander Graham Bell, em 1876." },
         { q = "Quem criou a internet?", a = "Tim Berners-Lee criou a World Wide Web em 1989." },
         { q = "Quem inventou o avião?", a = "Santos Dumont voou com o 14-Bis em 1906, em Paris." },
+        { q = "Quem inventou a televisão?", a = "John Logie Baird fez a primeira transmissão em 1926." },
+        { q = "Quem inventou o carro?", a = "Karl Benz criou o primeiro automóvel a gasolina em 1885." },
+        { q = "Quem inventou o Wi-Fi?", a = "A equipe do CSIRO australiano, liderada por John O'Sullivan, nos anos 90." },
     }},
     J = { theme = "Japão", options = {
         { q = "Qual é a capital do Japão?", a = "Tóquio, com mais de 13 milhões de habitantes." },
         { q = "Qual é a comida típica?", a = "Sushi: arroz com peixe cru ou outros ingredientes." },
         { q = "O que era um samurai?", a = "Guerreiro japonês medieval que seguia o código Bushido." },
+        { q = "Qual é a moeda do Japão?", a = "O iene (¥). É uma das moedas mais fortes do mundo." },
+        { q = "Qual é a montanha mais famosa do Japão?", a = "O Monte Fuji, com 3.776 metros de altura." },
+        { q = "O que é anime?", a = "Animação japonesa, com estilos e histórias únicas, como Naruto e One Piece." },
     }},
     K = { theme = "Curiosidades", options = {
         { q = "Quanto tempo sem água?", a = "Cerca de 3 dias, variando conforme clima e saúde." },
         { q = "Quantos corações tem um polvo?", a = "3 corações! Dois bombeiam para as brânquias, um para o corpo." },
         { q = "Qual é o país mais populoso?", a = "A Índia, ultrapassando a China em 2023." },
+        { q = "Qual animal nunca dorme?", a = "Nenhum vertebrado vive sem dormir. As formigas dormem em pequenos cochilos." },
+        { q = "Quantos litros de água cabem numa piscina olímpica?", a = "Cerca de 2,5 milhões de litros!" },
+        { q = "Por que o céu é azul?", a = "Por causa do espalhamento de Rayleigh, que dispersa mais a luz azul que a vermelha." },
     }},
     L = { theme = "Literatura", options = {
         { q = "Quem escreveu Dom Casmurro?", a = "Machado de Assis, em 1899." },
         { q = "Quem escreveu Romeu e Julieta?", a = "William Shakespeare, por volta de 1595." },
         { q = "Quem escreveu Harry Potter?", a = "J.K. Rowling, com o primeiro livro em 1997." },
+        { q = "Qual é o livro mais vendido do mundo?", a = "A Bíblia, com bilhões de cópias vendidas." },
+        { q = "Quem escreveu 'O Pequeno Príncipe'?", a = "Antoine de Saint-Exupéry, em 1943." },
+        { q = "Quantos livros tem a saga Harry Potter?", a = "7 livros principais + peças e livros extras." },
     }},
     M = { theme = "Matemática", options = {
         { q = "Quanto vale o PI?", a = "Aproximadamente 3,14159... Constante infinita usada em círculos." },
         { q = "Quantos lados tem um hexágono?", a = "6 lados. Como nas colmeias das abelhas!" },
         { q = "Quanto é 7 x 8?", a = "56!" },
+        { q = "Quantos segundos tem uma hora?", a = "3.600 segundos (60 x 60)." },
+        { q = "Qual é o número romano para 100?", a = "C. Os romanos usavam letras para representar números." },
+        { q = "O que é um número primo?", a = "Um número divisível apenas por 1 e por ele mesmo. Ex: 2, 3, 5, 7, 11..." },
     }},
     N = { theme = "Natureza", options = {
         { q = "Qual é a maior floresta?", a = "A Amazônica, com cerca de 5,5 milhões de km²." },
         { q = "Qual é a montanha mais alta?", a = "O Everest, com 8.848 metros." },
         { q = "Qual é o maior rio do mundo?", a = "O Amazonas em volume. O Nilo é o mais longo." },
+        { q = "Qual é o animal mais rápido do mar?", a = "O agulhão-vela, que pode nadar a 110 km/h!" },
+        { q = "Qual é a árvore mais alta do mundo?", a = "A sequoia-vermelha, podendo chegar a 115 metros." },
+        { q = "Qual é o fenômeno natural mais destrutivo?", a = "Furacões, terremotos e tsunamis estão entre os mais destrutivos." },
     }},
     O = { theme = "Ocorrências", options = {
         { q = "Quando foi a Revolução Francesa?", a = "1789, com a queda da Bastilha em 14 de julho." },
         { q = "Quando o homem pisou na Lua?", a = "20 de julho de 1969, Apollo 11, Neil Armstrong." },
         { q = "Quando foi o 11 de setembro?", a = "2001, nos Estados Unidos." },
+        { q = "Quando caiu o Muro de Berlim?", a = "9 de novembro de 1989." },
+        { q = "Quando foi a Proclamação da República no Brasil?", a = "15 de novembro de 1889, por Deodoro da Fonseca." },
+        { q = "Quando terminou a 1ª Guerra Mundial?", a = "11 de novembro de 1918, com o armistício assinado." },
     }},
     P = { theme = "Países", options = {
         { q = "Qual é o país mais populoso?", a = "A Índia, com mais de 1,4 bilhão de habitantes." },
         { q = "Qual é o país mais rico?", a = "Os EUA têm a maior economia, seguidos pela China." },
         { q = "Qual é o menor país?", a = "O Vaticano, com apenas 0,44 km²!" },
+        { q = "Quantos países existem no mundo?", a = "193 países membros da ONU + alguns territórios." },
+        { q = "Qual é o país mais frio?", a = "A Rússia tem as cidades mais frias, mas a Antártida é o lugar mais frio." },
+        { q = "Qual país tem o maior IDH?", a = "Suíça, Noruega e Islândia alternam no topo do ranking." },
     }},
     Q = { theme = "Química", options = {
         { q = "Qual o símbolo químico do ouro?", a = "Au, do latim 'aurum'." },
         { q = "Qual o elemento mais abundante?", a = "O hidrogênio, presente nas estrelas." },
         { q = "O que é H2O?", a = "A fórmula da água: 2 hidrogênios + 1 oxigênio." },
+        { q = "Qual é o gás que respiramos?", a = "Oxigênio (O2). O ar tem cerca de 21% de oxigênio." },
+        { q = "Qual o símbolo químico do ferro?", a = "Fe, do latim 'ferrum'." },
+        { q = "Quantos elementos tem a tabela periódica?", a = "118 elementos, sendo 94 naturais e 24 sintéticos." },
     }},
     R = { theme = "Recordes", options = {
         { q = "Quem é o homem mais rápido?", a = "Usain Bolt, 100m em 9,58 segundos." },
         { q = "Qual é o prédio mais alto?", a = "O Burj Khalifa, em Dubai, com 828 metros." },
         { q = "Qual é o animal mais pesado?", a = "A baleia-azul, podendo pesar 180 toneladas." },
+        { q = "Qual é o maior time de futebol em títulos?", a = "O Real Madrid tem mais títulos de Champions League (15)." },
+        { q = "Quem tem mais seguidores no Instagram?", a = "Cristiano Ronaldo, com mais de 600 milhões de seguidores." },
+        { q = "Qual é o vídeo mais visto do YouTube?", a = "'Baby Shark Dance', com mais de 14 bilhões de views." },
     }},
     S = { theme = "Saúde", options = {
         { q = "Quantas horas devemos dormir?", a = "Entre 7 e 9 horas por noite." },
         { q = "Por que a água é importante?", a = "Hidrata, regula temperatura e ajuda os órgãos." },
         { q = "Quantos litros de sangue temos?", a = "Cerca de 5 a 6 litros num adulto." },
+        { q = "Quantas vezes o coração bate por dia?", a = "Cerca de 100.000 vezes por dia!" },
+        { q = "Qual vitamina o sol produz?", a = "Vitamina D, essencial para os ossos." },
+        { q = "Quantos músculos tem o corpo humano?", a = "Cerca de 600 músculos no corpo todo." },
     }},
     T = { theme = "Tecnologia", options = {
         { q = "O que é IA?", a = "Inteligência Artificial: máquinas simulando inteligência humana." },
         { q = "Quem criou o Windows?", a = "Bill Gates fundou a Microsoft em 1975." },
         { q = "Quem criou a Apple?", a = "Steve Jobs, Steve Wozniak e Ronald Wayne, em 1976." },
+        { q = "O que significa CPU?", a = "Central Processing Unit — a unidade de processamento do computador." },
+        { q = "Quantos bits tem um byte?", a = "8 bits. É a unidade básica de informação digital." },
+        { q = "Quem criou o primeiro computador?", a = "O ENIAC, em 1946, foi um dos primeiros computadores eletrônicos." },
     }},
     U = { theme = "Universo", options = {
         { q = "Quantos anos tem o universo?", a = "Cerca de 13,8 bilhões de anos (Big Bang)." },
         { q = "O que é um buraco negro?", a = "Região com gravidade tão forte que nem a luz escapa." },
         { q = "Quantas galáxias existem?", a = "Estima-se mais de 2 trilhões no universo observável." },
+        { q = "O que é uma estrela cadente?", a = "É um meteoro que queima ao entrar na atmosfera terrestre." },
+        { q = "Qual é o planeta mais frio?", a = "Urano, com temperaturas de até -224°C!" },
+        { q = "O que é a Via Láctea?", a = "A galáxia onde vivemos, com cerca de 100 bilhões de estrelas." },
     }},
     V = { theme = "Viagens", options = {
         { q = "Qual é o país mais visitado?", a = "A França, com mais de 90 milhões de turistas/ano." },
         { q = "Qual é o lugar mais frio?", a = "A Antártida, com temperaturas de até -89°C!" },
         { q = "Qual é a cidade mais populosa?", a = "Tóquio, com mais de 37 milhões de pessoas." },
+        { q = "Qual é a Torre Eiffel?", a = "Um monumento em Paris, com 330 metros de altura, construído em 1889." },
+        { q = "Qual é a praia mais famosa do Brasil?", a = "Copacabana, no Rio, é uma das mais famosas do mundo." },
+        { q = "Qual é o ponto turístico mais visitado do mundo?", a = "A Times Square, em Nova York, com mais de 50 milhões de visitantes/ano." },
     }},
     W = { theme = "Web/Internet", options = {
         { q = "O que significa WWW?", a = "World Wide Web, criada por Tim Berners-Lee." },
         { q = "Quem fundou o Google?", a = "Larry Page e Sergey Brin, em 1998." },
         { q = "Quem fundou o Facebook?", a = "Mark Zuckerberg, em 2004, em Harvard." },
+        { q = "Quantos vídeos são enviados por minuto no YouTube?", a = "Mais de 500 horas de vídeo a cada minuto!" },
+        { q = "O que é um vírus de computador?", a = "Programa malicioso que se espalha e danifica sistemas." },
+        { q = "O que significa HTTPS?", a = "HyperText Transfer Protocol Secure — versão segura do HTTP." },
     }},
     X = { theme = "Xadrez", options = {
         { q = "Quantas peças tem o xadrez?", a = "32 peças: 16 para cada jogador, em 64 casas." },
         { q = "Qual é a peça mais poderosa?", a = "A Rainha (Dama), que se move em qualquer direção." },
         { q = "O que é xeque-mate?", a = "Quando o rei está sob ataque sem escapatória. Fim de jogo!" },
+        { q = "Quantos peões tem cada jogador?", a = "8 peões, que ficam na segunda fileira." },
+        { q = "O que é o roque?", a = "Movimento especial onde o rei e a torre trocam de lugar." },
+        { q = "Quem é o maior enxadrista da história?", a = "Magnus Carlsen é considerado o maior dos tempos modernos." },
     }},
     Y = { theme = "YouTube", options = {
         { q = "Quando foi criado o YouTube?", a = "2005, por Chad Hurley, Steve Chen e Jawed Karim." },
         { q = "Quem comprou o YouTube?", a = "O Google, em 2006, por 1,65 bilhão de dólares." },
         { q = "Qual é o vídeo mais visto?", a = "'Baby Shark Dance', com mais de 14 bilhões de views!" },
+        { q = "Quem é o maior youtuber do mundo?", a = "MrBeast (Jimmy Donaldson), com mais de 300 milhões de inscritos." },
+        { q = "O que é monetização?", a = "Quando o YouTube paga o criador pelos anúncios exibidos nos vídeos." },
+        { q = "O que é um 'YouTuber'?", a = "Pessoa que cria e publica conteúdo no YouTube." },
     }},
     Z = { theme = "Zoologia", options = {
         { q = "Quantas espécies existem?", a = "Entre 8 e 10 milhões, muitas ainda não descobertas." },
         { q = "Qual é o animal mais venenoso?", a = "A vespa-do-mar (box jellyfish)." },
         { q = "Qual é o animal mais forte?", a = "O besouro-rinoceronte, carrega 850x seu peso!" },
+        { q = "Quantos anos vive um elefante?", a = "Entre 60 e 70 anos em cativeiro." },
+        { q = "Qual animal tem a mordida mais forte?", a = "O crocodilo-de-água-salgada, com até 3.700 PSI." },
+        { q = "Qual animal vive mais tempo?", a = "A tartaruga-das-galápagos pode passar dos 175 anos." },
     }},
 }
 
 local alphabet = {"A","B","C","D","E","F","G","H","I","J","K","L","M","N","O","P","Q","R","S","T","U","V","W","X","Y","Z"}
+local optionLetters = {"A","B","C","D","E","F"}
 
 -- ===== NOTIFICAÇÃO =====
 local function notify(title, text, duration)
@@ -196,7 +281,7 @@ local function Chat(msg)
     end)
 end
 
--- ===== ANTI-FILTRO: cria variação da mensagem =====
+-- ===== ANTI-FILTRO =====
 local function makeVariation(text, attempt)
     local v = text
     if attempt == 1 then
@@ -220,12 +305,10 @@ local function makeVariation(text, attempt)
     return v
 end
 
--- ===== ENVIAR MENSAGEM (com anti-filtro) =====
 local function SendMessage(msg, attempts, prepend)
     attempts = attempts or 0
     local elapsed = tick() - timeSinceLastMessage
     if elapsed < minMessageCooldown then task.wait(minMessageCooldown - elapsed) end
-
     local entry = {text = msg, attempts = attempts}
     if prepend then
         table.insert(pendingMessages, 1, entry)
@@ -233,23 +316,18 @@ local function SendMessage(msg, attempts, prepend)
         table.insert(pendingMessages, entry)
     end
     while #pendingMessages > 30 do table.remove(pendingMessages, 1) end
-
     Chat(msg)
     timeSinceLastMessage = tick()
 end
 
--- ===== DETECTAR MENSAGEM FILTRADA =====
 local function handleOwnMessage(received)
     if #pendingMessages == 0 then return end
     local p = pendingMessages[1]
     local receivedClean = string.gsub(received, "#", "")
     local originalClean = string.gsub(p.text, "#", "")
-
     local isFiltered = string.find(received, "#") ~= nil
         or math.abs(#receivedClean - #originalClean) > 5
-
     table.remove(pendingMessages, 1)
-
     if isFiltered and p.attempts < MAX_RESEND then
         local variant = makeVariation(p.text, p.attempts + 1)
         task.wait(2)
@@ -271,49 +349,95 @@ local function AddCooldown(player)
     end)
 end
 
+local function optionLetterToIndex(letter)
+    for i, v in ipairs(optionLetters) do
+        if v == letter then return i end
+    end
+    return nil
+end
+
+-- ===== SISTEMA DE VEZ ÚNICA =====
+local function startAskerSession(player)
+    currentAskerToken = currentAskerToken + 1
+    local myToken = currentAskerToken
+    currentAsker = { name = player.Name, display = player.DisplayName }
+    
+    task.delay(askTimeout, function()
+        if currentAskerToken == myToken and currentAsker and currentAsker.name == player.Name then
+            SendMessage("⏰ | O tempo de "..player.DisplayName.." acabou! Outro jogador já pode perguntar.")
+            currentAsker = nil
+            awaitingPlayers[player.Name] = nil
+        end
+    end)
+end
+
+local function clearAskerSession()
+    currentAskerToken = currentAskerToken + 1
+    currentAsker = nil
+end
+
 -- ===== LÓGICA PRINCIPAL =====
 local function ProcessMessage(player, message)
     if not iaActive then return end
     if player == localPlayer then return end
+    
     local msg = string.upper(string.gsub(message, "%s", ""))
     if #msg == 0 or #msg > 2 then return end
     local firstChar = string.sub(msg, 1, 1)
 
-    local awaiting = awaitingPlayers[player.Name]
-    if awaiting then
-        if firstChar == "A" or firstChar == "B" or firstChar == "C" then
-            local optionIndex = (firstChar == "A") and 1 or (firstChar == "B") and 2 or 3
-            local themeData = iaData[awaiting]
-            if not themeData then awaitingPlayers[player.Name] = nil return end
-            local opt = themeData.options[optionIndex]
-            if not opt then return end
+    local isMyTurn = currentAsker and currentAsker.name == player.Name
+
+    -- === CASO 1: é o perguntador atual e está escolhendo uma opção ===
+    if isMyTurn and awaitingPlayers[player.Name] then
+        local optIndex = optionLetterToIndex(firstChar)
+        if optIndex then
+            local themeLetter = awaitingPlayers[player.Name]
+            local themeData = iaData[themeLetter]
             awaitingPlayers[player.Name] = nil
+            clearAskerSession()
+            if not themeData then return end
+            local opt = themeData.options[optIndex]
+            if not opt then return end
             SendMessage("🤖 | "..player.DisplayName..", aqui está a resposta:")
             task.wait(1)
             SendMessage("💡 | "..opt.a)
             task.wait(1)
             SendMessage("📚 | Quer saber mais? Digite outra letra (A-Z).")
+            return
         else
-            SendMessage("🤖 | "..player.DisplayName..", escolha A, B ou C para continuar.")
+            SendMessage("🤖 | "..player.DisplayName..", escolha uma letra de A até F.")
+            return
         end
+    end
+
+    -- === CASO 2: já tem alguém perguntando (não é ele) → bloqueia ===
+    if currentAsker and currentAsker.name ~= player.Name then
+        SendMessage("⏳ | Aguarde! "..currentAsker.display.." está escolhendo. Uma pergunta por vez.")
         return
     end
 
+    -- === CASO 3: inicia nova pergunta ===
     if table.find(alphabet, firstChar) then
         if IsOnCooldown(player) then return end
         AddCooldown(player)
         local themeData = iaData[firstChar]
         if not themeData then return end
+
         awaitingPlayers[player.Name] = firstChar
+        startAskerSession(player)
+
         SendMessage("🤖 | Olá, "..player.DisplayName.."! Letra "..firstChar..": "..themeData.theme)
         task.wait(1)
-        SendMessage("❓ | O que você quer saber?")
+        SendMessage("❓ | O que você quer saber? (Você tem "..askTimeout.." segundos)")
         task.wait(1)
-        for i = 1, 3 do
-            SendMessage(alphabet[i]..") "..themeData.options[i].q)
-            task.wait(1)
+        for i = 1, 6 do
+            local opt = themeData.options[i]
+            if opt then
+                SendMessage(optionLetters[i]..") "..opt.q)
+                task.wait(1)
+            end
         end
-        SendMessage("👉 | Digite A, B ou C para escolher.")
+        SendMessage("👉 | Digite uma letra de A até F para escolher.")
     end
 end
 
@@ -324,13 +448,10 @@ local function StartListening()
         if not textChatMessage.TextSource then return end
         local player = Players:GetPlayerByUserId(textChatMessage.TextSource.UserId)
         if not player then return end
-
-        -- Se a mensagem é NOSSA, verifica se foi filtrada
         if player == localPlayer then
             handleOwnMessage(textChatMessage.Text)
             return
         end
-
         if not iaActive then return end
         ProcessMessage(player, textChatMessage.Text)
     end)
@@ -341,9 +462,10 @@ StartListening()
 local instructionMessages = {
     "📖 | COMO USAR A IA:",
     "1️⃣ | Digite uma letra de A a Z no chat.",
-    "2️⃣ | A IA diz o tema e mostra 3 opções: A) B) C).",
-    "3️⃣ | Digite A, B ou C para escolher.",
-    "4️⃣ | A IA responde! Depois é só digitar outra letra.",
+    "2️⃣ | A IA mostra 6 opções (A até F) do tema escolhido.",
+    "3️⃣ | Você tem "..askTimeout.." segundos para escolher uma letra de A até F.",
+    "4️⃣ | Enquanto você escolhe, outros jogadores ficam bloqueados (só 1 por vez!).",
+    "5️⃣ | Depois de responder, a vez fica livre para o próximo.",
     "💡 | Dica: clique em 'Mostrar letras' na GUI pra ver todos os temas.",
 }
 
@@ -514,7 +636,7 @@ local tabMain = Instance.new("ScrollingFrame")
 tabMain.Size = UDim2.new(1, 0, 1, 0)
 tabMain.BackgroundTransparency = 1
 tabMain.BorderSizePixel = 0
-tabMain.CanvasSize = UDim2.new(0, 0, 0, 400)
+tabMain.CanvasSize = UDim2.new(0, 0, 0, 500)
 tabMain.ScrollBarThickness = 4
 tabMain.ScrollBarImageColor3 = Color3.fromRGB(60, 130, 220)
 tabMain.Parent = contentFrame
@@ -553,7 +675,7 @@ local function makeButton(parent, text, yPos, color, callback)
     return btn
 end
 
--- Botão toggle (Ativar IA)
+-- Botão toggle
 local toggleBtn = Instance.new("TextButton")
 toggleBtn.Size = UDim2.new(1, 0, 0, 50)
 toggleBtn.Position = UDim2.new(0, 0, 0, 40)
@@ -581,18 +703,36 @@ toggleBtn.MouseButton1Click:Connect(function()
         toggleBtn.Text = "🤖 Ativar IA"
         toggleBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 70)
         awaitingPlayers = {}
+        clearAskerSession()
         notify("IA desativada ❌", "A IA foi desligada.")
         pcall(function() SendMessage("🤖 | IA desativada.") end)
     end
 end)
 
-makeLabel(tabMain, "📖 AJUDA", 105, 22, Color3.fromRGB(100, 180, 255))
+-- Status da vez atual
+makeLabel(tabMain, "📊 STATUS DA VEZ", 105, 22, Color3.fromRGB(100, 180, 255))
+local statusLabel = makeLabel(tabMain, "🟢 Ninguém perguntando agora", 130, 25, Color3.fromRGB(150, 220, 150))
 
-makeButton(tabMain, "📖 Mostrar instruções no chat", 135, Color3.fromRGB(70, 130, 90), SendInstructions)
-makeButton(tabMain, "📚 Mostrar o que cada letra diz", 185, Color3.fromRGB(120, 90, 180), SendThemeList)
+task.spawn(function()
+    while true do
+        task.wait(0.5)
+        if currentAsker then
+            statusLabel.Text = "🟡 "..currentAsker.display.." está escolhendo..."
+            statusLabel.TextColor3 = Color3.fromRGB(255, 220, 100)
+        else
+            statusLabel.Text = "🟢 Ninguém perguntando agora"
+            statusLabel.TextColor3 = Color3.fromRGB(150, 220, 150)
+        end
+    end
+end)
 
-makeLabel(tabMain, "ℹ️ SOBRE", 245, 22, Color3.fromRGB(100, 180, 255))
-makeLabel(tabMain, "Digite uma letra (A-Z) no chat. A IA mostra 3 opções (A/B/C). Escolha uma e receba a resposta! Funciona para todos os jogadores do servidor enquanto a IA estiver ativada.", 275, 80, Color3.fromRGB(180, 180, 180))
+makeLabel(tabMain, "📖 AJUDA", 170, 22, Color3.fromRGB(100, 180, 255))
+
+makeButton(tabMain, "📖 Mostrar instruções no chat", 200, Color3.fromRGB(70, 130, 90), SendInstructions)
+makeButton(tabMain, "📚 Mostrar o que cada letra diz", 250, Color3.fromRGB(120, 90, 180), SendThemeList)
+
+makeLabel(tabMain, "ℹ️ SOBRE", 310, 22, Color3.fromRGB(100, 180, 255))
+makeLabel(tabMain, "Digite uma letra (A-Z) no chat. A IA mostra 6 opções (A até F). Você tem "..askTimeout.." segundos para escolher! Enquanto isso, outros jogadores ficam bloqueados.", 340, 90, Color3.fromRGB(180, 180, 180))
 
 -- ===== ABA LETRAS =====
 local tabLetters = Instance.new("ScrollingFrame")
@@ -629,7 +769,7 @@ local tabConfig = Instance.new("ScrollingFrame")
 tabConfig.Size = UDim2.new(1, 0, 1, 0)
 tabConfig.BackgroundTransparency = 1
 tabConfig.BorderSizePixel = 0
-tabConfig.CanvasSize = UDim2.new(0, 0, 0, 500)
+tabConfig.CanvasSize = UDim2.new(0, 0, 0, 600)
 tabConfig.ScrollBarThickness = 4
 tabConfig.ScrollBarImageColor3 = Color3.fromRGB(60, 130, 220)
 tabConfig.Visible = false
@@ -666,21 +806,63 @@ cdInput.FocusLost:Connect(function()
     end
 end)
 
-makeButton(tabConfig, "🔄 Resetar cooldowns", 130, Color3.fromRGB(180, 120, 60), function()
+-- Timeout input
+local timeoutLabel = makeLabel(tabConfig, "⌛ Tempo para escolher (A-F): "..askTimeout.."s", 130, 25)
+local timeoutInput = Instance.new("TextBox")
+timeoutInput.Size = UDim2.new(1, 0, 0, 38)
+timeoutInput.Position = UDim2.new(0, 0, 0, 160)
+timeoutInput.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
+timeoutInput.Text = tostring(askTimeout)
+timeoutInput.PlaceholderText = "Digite o tempo em segundos"
+timeoutInput.TextColor3 = Color3.fromRGB(230, 230, 230)
+timeoutInput.PlaceholderColor3 = Color3.fromRGB(140, 140, 140)
+timeoutInput.TextSize = 14
+timeoutInput.Font = Enum.Font.Gotham
+timeoutInput.BorderSizePixel = 0
+timeoutInput.ClearTextOnFocus = false
+timeoutInput.Parent = tabConfig
+local tic = Instance.new("UICorner")
+tic.CornerRadius = UDim.new(0, 8)
+tic.Parent = timeoutInput
+
+timeoutInput.FocusLost:Connect(function()
+    local num = tonumber(timeoutInput.Text)
+    if num and num >= 3 then
+        askTimeout = num
+        timeoutLabel.Text = "⌛ Tempo para escolher (A-F): "..askTimeout.."s"
+        notify("Tempo atualizado", "Novo: "..askTimeout.."s")
+    else
+        timeoutInput.Text = tostring(askTimeout)
+    end
+end)
+
+makeButton(tabConfig, "🔄 Resetar cooldowns", 220, Color3.fromRGB(180, 120, 60), function()
     userCooldowns = {}
     notify("Cooldowns resetados ✅", "Todos podem usar a IA novamente")
 end)
 
-makeButton(tabConfig, "🧹 Limpar fila de espera", 180, Color3.fromRGB(180, 120, 60), function()
+makeButton(tabConfig, "🧹 Limpar fila de espera", 270, Color3.fromRGB(180, 120, 60), function()
     awaitingPlayers = {}
+    clearAskerSession()
     notify("Fila limpa ✅", "Todos podem recomeçar")
 end)
 
-makeLabel(tabConfig, "⚠️ ZONA DE PERIGO", 250, 22, Color3.fromRGB(255, 100, 100))
+makeButton(tabConfig, "🔓 Liberar vez atual", 320, Color3.fromRGB(200, 140, 60), function()
+    if currentAsker then
+        notify("Vez liberada", currentAsker.display.." foi liberado manualmente")
+        clearAskerSession()
+        awaitingPlayers = {}
+    else
+        notify("Ninguém perguntando", "Não há vez para liberar")
+    end
+end)
 
-makeButton(tabConfig, "❌ Destruir GUI e desativar", 280, Color3.fromRGB(200, 60, 60), function()
+makeLabel(tabConfig, "⚠️ ZONA DE PERIGO", 390, 22, Color3.fromRGB(255, 100, 100))
+
+makeButton(tabConfig, "❌ Destruir GUI e desativar", 420, Color3.fromRGB(200, 60, 60), function()
     iaActive = false
     awaitingPlayers = {}
+    clearAskerSession()
     if chatConnection then chatConnection:Disconnect() end
     screenGui:Destroy()
 end)
@@ -714,5 +896,5 @@ end)
 -- ===== MENSAGEM INICIAL =====
 notify("🤖 IA Chat Bot", "Script carregado! Clique no botão 🤖 para abrir a GUI.", 6)
 
-print("[IA Chat Bot] Script carregado com sucesso! v2.0")
-print("[IA Chat Bot] Anti-filtro ativo | Botão duplicado corrigido")
+print("[IA Chat Bot] Script carregado com sucesso! v4.0")
+print("[IA Chat Bot] Anti-filtro | 6 opções (A-F) | Vez única com timeout de "..askTimeout.."s")
